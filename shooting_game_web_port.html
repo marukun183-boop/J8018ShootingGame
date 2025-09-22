@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ShootingGame — JS Canvas Port (移植版, 画像対応)</title>
+<style>
+  html,body{height:100%;margin:0;background:#001;overflow:hidden}
+  canvas{display:block}
+  #ui{position:fixed;left:8px;top:8px;color:#fff;font-family:Arial,Helvetica,sans-serif;z-index:10}
+  #controls{background:rgba(0,0,0,0.4);padding:8px;border-radius:6px}
+  button,input{margin:4px}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div id="controls">
+    <button id="btnReset">Reset → Level Select</button>
+    <label>Seed:<input id="seed" type="number" value="12345" style="width:90px"/></label>
+    <button id="applySeed">Apply Seed</button>
+    <label>FR</label>
+    <select id="fr">
+      <option value="30">30 FPS</option>
+      <option value="60">60 FPS</option>
+    </select>
+    <span style="font-size:12px;opacity:0.9">(固定ステップ物理。C# と同じにするには 30 を選択)</span>
+  </div>
+</div>
+<canvas id="c"></canvas>
+<script>
+// ------------------ Config ------------------
+const Config = {
+  GLOBAL_SCALE: 0.5,
+  POINTER_SCALE: 2.8 * 1.5,
+  SPRITE_SCALE: 1.5,
+  IMAGE_DOWNSCALE: 4,
+  TARGET_IMAGE_DOWNSCALE: 10,
+  BASE_BULLET_SIZE: 50 * 0.5 * 1.5 * 1.5 // 50 * GLOBAL_SCALE * SPRITE_SCALE * 1.5
+};
+
+// ------------------ PRNG (simple LCG) ------------------
+class RNG { constructor(seed=12345){ this.seed = seed >>> 0 } next(){ this.seed = (1664525 * this.seed + 1013904223) >>> 0; return (this.seed & 0x7FFFFFFF) / 0x80000000 } nextInt(min,max){ return Math.floor(this.next() * (max - min + 1)) + min }}
+
+// ------------------ Canvas setup ------------------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let DPR = Math.max(1, window.devicePixelRatio || 1);
+function resize(){
+  canvas.width = Math.max(200, Math.floor(window.innerWidth * DPR));
+  canvas.height = Math.max(200, Math.floor(window.innerHeight * DPR));
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize); resize();
+
+// ------------------ Image loader ------------------
+function loadOne(paths){ // try paths in order, return first loaded Image or null
+  return new Promise(resolve => {
+    let i = 0;
+    function tryNext(){
+      if (i >= paths.length){ resolve(null); return }
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => { i++; tryNext() };
+      img.src = paths[i];
+    }
+    tryNext();
+  });
+}
+
+async function preloadAll(){
+  // filenames used in the original C# code
+  const bg = await loadOne(['BackGroundNight.jpg','BackGroundNight.png','BackGroundNoon.jpg','BackGroundNoon.png']);
+  const pointer = await loadOne(['pointer.png','pointer.jpg']);
+  const target = await loadOne(['target.png','target.jpg']);
+  const altTarget = await loadOne(['target2.png','target2.jpg']);
+  const bullet = await loadOne(['bullet.png','bullet.jpg']);
+  return { background: bg, pointer: pointer, target: target, altTarget: altTarget, bullet: bullet };
+}
+
+// ------------------ Utilities ------------------
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)) }
+
+// ------------------ Pools & Entities ------------------
+class BulletPool{ constructor(){ this.stack=[] } rent(){ return this.stack.length?this.stack.pop():new Bullet() } ret(b){ b.reset(); this.stack.push(b) }}
+class TargetPool{ constructor(){ this.stack=[] } rent(){ return this.stack.length?this.stack.pop():new Target() } ret(t){ t.reset(); this.stack.push(t) }}
+
+class Bullet{ constructor(){ this.reset() } reset(){ this.x=0; this.y=0; this.vx=0; this.vy=0; this.startX=0; this.startY=0; this.elapsed=0; this.size=Config.BASE_BULLET_SIZE; this.hasCheckedCollision=false; this.hasHit=false } init(sX,sY,tx,ty){ this.startX=sX; this.startY=sY; this.x=sX; this.y=sY; this.elapsed=0; this.hasCheckedCollision=false; this.hasHit=false; this.size=Config.BASE_BULLET_SIZE; const GRAVITY=1000; const TARGET_TIME=0.3; this.vx=(tx-sX)/TARGET_TIME; this.vy=(ty-sY + 0.5*GRAVITY*TARGET_TIME*TARGET_TIME)/TARGET_TIME } update(dt){ this.elapsed += dt; const GRAVITY=1000; const TARGET_TIME=0.3; this.x = this.startX + this.vx * this.elapsed; this.y = this.startY + this.vy * this.elapsed - 0.5 * GRAVITY * this.elapsed * this.elapsed; if (this.elapsed <= TARGET_TIME){ let t = this.elapsed / TARGET_TIME; let factor = 1.0 - 0.85 * t; this.size = Config.BASE_BULLET_SIZE * Math.max(0.12, factor); } else if (this.elapsed <= 1.0){ let t = (this.elapsed - TARGET_TIME) / (1.0 - TARGET_TIME); let startF = 0.15, endF = 0.08; let factor = startF + (endF - startF) * t; this.size = Config.BASE_BULLET_SIZE * Math.max(0.06, factor); } else { this.size = Config.BASE_BULLET_SIZE * 0.06 } } shouldCheckCollision(){ if (!this.hasCheckedCollision && this.elapsed >= 0.3){ this.hasCheckedCollision = true; return true } return false } shouldBeRemoved(){ if (this.hasHit) return true; if (this.elapsed > 5.0) return true; const SMALL_REMOVE_SIZE = 6 * Config.GLOBAL_SCALE; if (this.getSize() <= SMALL_REMOVE_SIZE && this.elapsed >= 1.2) return true; if (this.x < -1200 || this.x > 12000 || this.y < -1200 || this.y > 12000) return true; return false } getSize(){ return Math.max(4 * Config.GLOBAL_SCALE * Config.SPRITE_SCALE, this.size) } draw(g, img){ if (img){ let s = this.getSize(); g.drawImage(img, this.x - s/2, this.y - s/2, s, s); } else { g.beginPath(); g.fillStyle = 'rgba(60,120,255,0.86)'; let s = this.getSize(); g.ellipse(this.x, this.y, s/2, s/2, 0, 0, Math.PI*2); g.fill() } }
+}
+
+class Target{ constructor(){ this.reset() } reset(){ this.x=0; this.y=0; this.size=0; this.speed=0; this.scoreValue=0; this.isHit=false; this.useAltImage=false } isOutOfBounds(w,h){ return this.x < -this.size - 200 || this.x > w + this.size + 200 || this.y < -200 || this.y > h + 200 } draw(g, img, altImg){ if (this.isHit) return; let drawX = this.x - this.size/2; let drawY = this.y - this.size/2; if (this.useAltImage && altImg){ g.drawImage(altImg, drawX, drawY, this.size, this.size); } else if (img){ g.drawImage(img, drawX, drawY, this.size, this.size); } else { let speedColor = Math.min(255, Math.abs(this.speed)/3.0); let r = 80 + speedColor/2; let gr = 50 + speedColor; let b = 255 - Math.min(120, speedColor); g.beginPath(); g.fillStyle = `rgba(${~~r},${~~gr},${~~b},0.78)`; g.ellipse(this.x, this.y, this.size/2, this.size/2,0,0,Math.PI*2); g.fill(); } }
+}
+
+class ReturnTarget{ constructor(x,y,size){ this.x=x; this.y=y; this.size=size; this.isHit=false } }
+class LevelTarget{ constructor(levelNumber,x,y,size){ this.levelNumber=levelNumber; this.x=x; this.y=y; this.size=size; this.isHit=false } draw(g){ g.beginPath(); g.fillStyle='rgba(135,206,235,0.78)'; g.ellipse(this.x,this.y,this.size/2,this.size/2,0,0,Math.PI*2); g.fill(); g.lineWidth = Math.max(1,3*Config.GLOBAL_SCALE); g.strokeStyle='blue'; g.stroke(); g.fillStyle='black'; g.font = `${28*Config.GLOBAL_SCALE}px Arial`; let txt = (this.levelNumber==11)?'EX':String(this.levelNumber); let metrics = g.measureText(txt); let h = 28*Config.GLOBAL_SCALE; g.fillText(txt, this.x - metrics.width/2, this.y + h/2 - 6); }
+}
+
+class ScorePopup{ constructor(x,y,text,color,duration,fontSize){ this.reset(x,y,text,color,duration); this.fontSize = fontSize||18*Config.GLOBAL_SCALE*2.5 } reset(x,y,text,color,duration){ this.x=x; this.y=y; this.text=text; this.color=color; this.duration=duration; this.elapsed=0 } update(dt){ this.elapsed += dt; this.y -= dt * 20 } getExpired(){ return this.elapsed >= this.duration } draw(g){ let a = 1 - Math.min(1, this.elapsed/this.duration); let c = this.color; g.fillStyle = `rgba(${c.r},${c.g},${c.b},${(c.a/255)*a})`; g.font = `${this.fontSize}px Arial`; let metrics = g.measureText(this.text); g.fillText(this.text, this.x - metrics.width/2, this.y + this.fontSize/2 - 6) }
+}
+
+// ------------------ Game ------------------
+class Game{
+  constructor(images){
+    this.images = images || {};
+    this.rng = new RNG(12345);
+    this.bulletPool = new BulletPool();
+    this.targetPool = new TargetPool();
+    this.liveBullets = [];
+    this.liveTargets = [];
+    this.levelTargets = [];
+    this.popups = [];
+    this.popupPool = [];
+
+    this.score = 0; this.level = 1; this.isLevelSelected = false; this.gameTime = 45; this.isGameOver=false;
+    this.lastShotTime = -9999; this.pointerPos = {x:canvas.width/DPR/2,y:canvas.height/DPR/2};
+    this.BACKGROUND_DOWNSCALE = Config.IMAGE_DOWNSCALE;
+    this.maxTargets = 20;
+    this.recentScoresPerLevel = Array.from({length:12}, ()=>[]);
+
+    this.returnTarget = null;
+
+    this.CreateLevelTargets();
+
+    // input
+    canvas.addEventListener('mousemove', (e)=>{ let r=canvas.getBoundingClientRect(); this.pointerPos.x = clamp((e.clientX - r.left),0, r.width); this.pointerPos.y = clamp((e.clientY - r.top), 0, r.height) });
+    canvas.addEventListener('mousedown', (e)=>{ this.onMouseDown(e) });
+
+    // timing
+    this.fixedDelta = 1/30; // default fixed-step
+    this.accumulator = 0; this.lastTime = performance.now()/1000;
+    requestAnimationFrame(()=>this.loop());
+  }
+
+  setSeed(s){ this.rng = new RNG(s) }
+
+  CreateLevelTargets(){ this.levelTargets.length=0; let total = 11; let margin = Math.max(1, Math.round(120 * Config.GLOBAL_SCALE)); let usableWidth = canvas.width/DPR - margin*2; let spacing = usableWidth/total; let centerY = canvas.height/DPR/2; for (let i=1;i<=total;i++){ let rawSize = (i<=10) ? Math.max(40,160 - (i-1)*12) : 100; let size = Math.max(12, Math.round(rawSize * Config.GLOBAL_SCALE * Config.SPRITE_SCALE * 1.5)); let x = margin + spacing*(i-1) + spacing/2; let y = centerY; this.levelTargets.push(new LevelTarget(i,x,y,size)) } }
+
+  onMouseDown(e){ let now = performance.now(); if ((now - this.lastShotTime) < 300) return; this.lastShotTime = now; let rect = canvas.getBoundingClientRect(); let tx = clamp(e.clientX - rect.left, 0, rect.width); let ty = clamp(e.clientY - rect.top, 0, rect.height); let startX = rect.width/2; let startY = rect.height - 30; let b = this.bulletPool.rent(); b.init(startX, startY, tx, ty); this.liveBullets.push(b); this.pointerPos.x = tx; this.pointerPos.y = ty }
+
+  loop(){ let now = performance.now()/1000; let frameTime = now - this.lastTime; this.lastTime = now; if (frameTime > 0.25) frameTime = 0.25; this.accumulator += frameTime; while (this.accumulator >= this.fixedDelta){ this.update(this.fixedDelta); this.accumulator -= this.fixedDelta } this.draw(); requestAnimationFrame(()=>this.loop()) }
+
+  update(dt){ try{
+    if (!this.isLevelSelected){ this.UpdateBulletsSelection(dt); return }
+
+    if (!this.isGameOver){ this.gameTime -= dt; if (this.gameTime <= 0){ this.gameTime = 0; this.EnterGameOverState() } }
+
+    if (!this.isGameOver) this.UpdateTargets(dt);
+
+    for (let i=this.liveBullets.length-1;i>=0;i--) this.liveBullets[i].update(dt);
+
+    for (let i=this.popups.length-1;i>=0;i--){ let p=this.popups[i]; p.update(dt); if (p.getExpired()){ this.popups.splice(i,1); this.popupPool.push(p) } }
+
+    this.HandleCollisions();
+
+    for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; if (b.shouldBeRemoved()){ this.liveBullets.splice(i,1); this.bulletPool.ret(b) } }
+
+  } catch(err){ console.error('update error', err) } }
+
+  UpdateTargets(dt){ let spawnProbPerTick = 0.006 + this.level * 0.003 + Math.min(0.02, this.score/8000); if (this.level==11) spawnProbPerTick *= 3.2; if (this.liveTargets.length < this.maxTargets && this.rng.next() < spawnProbPerTick){ let t = this.targetPool.rent(); this.InitializeTarget(t); this.liveTargets.push(t) } for (let i=this.liveTargets.length-1;i>=0;i--){ let t=this.liveTargets[i]; t.x += t.speed * dt; if (t.isOutOfBounds(canvas.width/DPR, canvas.height/DPR)){ this.liveTargets.splice(i,1); this.targetPool.ret(t) } } }
+
+  InitializeTarget(t){ let fromLeft = (this.rng.nextInt(0,1)===0); let rawBaseSize = Math.max(12, 120 - (this.level - 1) * 9); let sizeVar = this.rng.nextInt(-6,7); let rawSizeVal = Math.max(8, rawBaseSize + sizeVar); t.size = Math.max(8, Math.round(rawSizeVal * Config.GLOBAL_SCALE * Config.SPRITE_SCALE * 1.5)); t.y = this.rng.nextInt(20, Math.max(40, Math.floor(canvas.height/DPR * 3 / 4))); t.x = fromLeft ? -t.size : canvas.width/DPR + t.size; let slowMin, slowMax, fastMin, fastMax; if (this.level == 11){ slowMin = 800; slowMax = 1200; fastMin = 1300; fastMax = 2200; } else { slowMin = 60 + (this.level - 1) * 8; slowMax = 120 + (this.level - 1) * 12; fastMin = 220 + (this.level - 1) * 25; fastMax = 420 + (this.level - 1) * 40 } let pick = this.rng.next(); let speedMag; if (pick < 0.55) speedMag = slowMin + this.rng.next() * (slowMax - slowMin); else if (pick < 0.9) speedMag = fastMin + this.rng.next() * (fastMax - fastMin); else speedMag = fastMax + this.rng.next() * Math.max(1, fastMax - fastMin); t.speed = fromLeft ? speedMag : -speedMag; let baseScore = (this.level == 11) ? 200 : Math.max(6, this.level * 12); let sizeFactor = Math.max(0.35, 1.0 - (t.size - 10) / 120.0); let speedNorm = (speedMag - slowMin) / Math.max(1, fastMax - slowMin); let speedFactor = 1.0 + Math.min(3.5, speedNorm * 3.0); t.scoreValue = Math.max(1, Math.round(baseScore * speedFactor * sizeFactor)); this.AddRecentScore(this.level, t.scoreValue); let cutoff = this.GetPercentileCutoff(this.level, 0.86); if (cutoff <= 0) t.useAltImage = (t.scoreValue >= baseScore * 1.6); else t.useAltImage = (t.scoreValue >= cutoff); if (!t.useAltImage && this.rng.next() < 0.02) t.useAltImage = true; t.isHit = false }
+
+  AddRecentScore(lvl,s){ if (lvl<1||lvl>11) return; let list = this.recentScoresPerLevel[lvl]; list.push(s); if (list.length > 300) list.splice(0, list.length - 300) }
+  GetPercentileCutoff(lvl, percentile){ if (lvl<1||lvl>11) return 0; let list = this.recentScoresPerLevel[lvl]; if (list.length < 12) return 0; let sorted = Array.from(list).sort((a,b)=>a-b); let idx = Math.ceil(percentile * sorted.length) - 1; idx = Math.max(0, Math.min(sorted.length-1, idx)); return sorted[idx] }
+
+  HandleCollisions(){ for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; if (!b.shouldCheckCollision()) continue; let consumed=false; for (let j=this.liveTargets.length-1;j>=0;j--){ let t=this.liveTargets[j]; if (t.isHit) continue; if (this.CheckHit(b,t)){ t.isHit=true; this.score += t.scoreValue; let c = t.useAltImage ? {r:220,g:40,b:40,a:220} : {r:40,g:120,b:220,a:220}; let sp = this.popupPool.length? this.popupPool.pop() : new ScorePopup(0,0,'',c,1.0,18*Config.GLOBAL_SCALE*2.5); sp.reset(t.x, t.y - t.size*0.6, `+${t.scoreValue}`, c, 1.0); this.popups.push(sp); this.liveTargets.splice(j,1); this.targetPool.ret(t); consumed=true; break } } if (consumed){ this.liveBullets.splice(i,1); this.bulletPool.ret(b); continue } if (this.isGameOver && this.returnTarget && !this.returnTarget.isHit){ if (this.CheckHitReturn(b, this.returnTarget)){ this.returnTarget.isHit = true; this.liveBullets.splice(i,1); this.bulletPool.ret(b); this.ResetToLevelSelect(); return } } } }
+
+  CheckHit(b,t){ let dx = b.x - t.x; let dy = b.y - t.y; let r = (b.getSize()/2) + (t.size/2); return (dx*dx + dy*dy) < (r*r*1.2) }
+  CheckHitReturn(b,rt){ let dx = b.x - rt.x; let dy = b.y - rt.y; let r = (b.getSize()/2) + (rt.size/2); return (dx*dx + dy*dy) < (r*r*1.2) }
+
+  EnterGameOverState(){ if (this.isGameOver) return; this.isGameOver = true; for (let i=this.liveTargets.length-1;i>=0;i--) this.targetPool.ret(this.liveTargets[i]); this.liveTargets.length=0; let cx = canvas.width/DPR/2; let cy = canvas.height/DPR/2 + 140 * Config.GLOBAL_SCALE + 120 * Config.GLOBAL_SCALE; this.returnTarget = new ReturnTarget(cx, cy, Math.max(18, Math.round(160 * Config.GLOBAL_SCALE * Config.SPRITE_SCALE))) }
+
+  ResetToLevelSelect(){ this.isLevelSelected = false; this.isGameOver=false; this.gameTime = 45; for (let i=this.liveTargets.length-1;i>=0;i--) this.targetPool.ret(this.liveTargets[i]); this.liveTargets.length=0; for (let i=this.liveBullets.length-1;i>=0;i--) this.bulletPool.ret(this.liveBullets[i]); this.liveBullets.length=0; for (let i=this.popups.length-1;i>=0;i--){ this.popupPool.push(this.popups[i]) } this.popups.length=0; this.returnTarget=null; this.CreateLevelTargets() }
+
+  UpdateBulletsSelection(dt){ for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; b.update(dt); if (b.shouldCheckCollision()){ for (let j=this.levelTargets.length-1;j>=0;j--){ let lt=this.levelTargets[j]; if (!lt.isHit && this.CheckHitLevel(b, lt)){ lt.isHit=true; this.level = lt.levelNumber; this.isLevelSelected = true; this.liveTargets.length=0; this.score=0; this.lastShotTime = -9999; this.gameTime=45; this.isGameOver=false; for (let k=this.liveBullets.length-1;k>=0;k--) this.bulletPool.ret(this.liveBullets[k]); this.liveBullets.length=0; return } } } } for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; if (b.shouldBeRemoved()){ this.liveBullets.splice(i,1); this.bulletPool.ret(b) } } }
+  CheckHitLevel(b,lt){ let dx = b.x - lt.x; let dy = b.y - lt.y; let r = (b.getSize()/2) + (lt.size/2); return (dx*dx + dy*dy) < (r*r*1.2) }
+
+  // drawing
+  draw(){ ctx.clearRect(0,0,canvas.width/DPR,canvas.height/DPR);
+    // background
+    if (this.images.background){ ctx.drawImage(this.images.background, 0, 0, canvas.width/DPR, canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
+    else { ctx.fillStyle = 'darkslateblue'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
+
+    if (!this.isLevelSelected){ ctx.fillStyle='white'; ctx.font = `${28*Config.GLOBAL_SCALE}px Arial`; ctx.textAlign='center'; ctx.fillText('Shoot a level target to start (click to shoot)', canvas.width/DPR/2, 40); for (let i=0;i<this.levelTargets.length;i++) this.levelTargets[i].draw(ctx); for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } this.drawPointer(ctx); return }
+
+    for (let i=0;i<this.liveTargets.length;i++) this.liveTargets[i].draw(ctx, this.images.target, this.images.altTarget);
+    for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
+    for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
+    for (let i=0;i<this.popups.length;i++) this.popups[i].draw(ctx);
+    this.drawOtherUI(ctx);
+
+    if (this.isGameOver){ ctx.textAlign='center'; ctx.fillStyle='orange'; ctx.font = `${48*Config.GLOBAL_SCALE*2.5}px Arial`; ctx.fillText(`Final Score: ${this.score}`, canvas.width/DPR/2, canvas.height/DPR*0.28); ctx.fillStyle='white'; ctx.font = `${20*Config.GLOBAL_SCALE*2.5}px Arial`; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; ctx.fillText(levelText, canvas.width/DPR/2, canvas.height/DPR*0.28 + 80); ctx.fillText('次のコーナーに行ってらっしゃい！！', canvas.width/DPR/2, canvas.height/DPR*0.28 + 140); if (this.returnTarget){ let extraDown = 160 * Config.GLOBAL_SCALE; ctx.fillStyle='rgba(40,200,40,0.86)'; ctx.beginPath(); ctx.ellipse(this.returnTarget.x, this.returnTarget.y + extraDown, this.returnTarget.size/2, this.returnTarget.size/2,0,0,Math.PI*2); ctx.fill(); ctx.lineWidth = Math.max(1,4*Config.GLOBAL_SCALE); ctx.strokeStyle='black'; ctx.stroke(); ctx.fillStyle='white'; ctx.font = `${22*Config.GLOBAL_SCALE}px Arial`; ctx.fillText('START', this.returnTarget.x, this.returnTarget.y + extraDown + (this.returnTarget.size/4)); } }
+
+    this.drawPointer(ctx);
+  }
+
+  drawOtherUI(g){ g.fillStyle='white'; g.font = `${20*Config.GLOBAL_SCALE*2.5}px Arial`; g.textAlign='left'; g.fillText(`Score: ${this.score}`, 20, 36); g.textAlign='center'; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; g.fillText(levelText, canvas.width/DPR/2, 36); g.textAlign='right'; g.fillStyle='yellow'; g.fillText(`Time: ${this.gameTime.toFixed(1)}s`, canvas.width/DPR - 20, 36) }
+
+  drawPointer(g){ let px = this.pointerPos.x; let py = this.pointerPos.y; let imgBase = 80 * Config.GLOBAL_SCALE; let circleBase = 48 * Config.GLOBAL_SCALE; if (this.images.pointer){ let w = imgBase * Config.POINTER_SCALE * 1.6; let h = imgBase * Config.POINTER_SCALE * 0.95; g.drawImage(this.images.pointer, px - w/2, py - h/2, w, h); } else { let w = circleBase * Config.POINTER_SCALE * 1.8; let h = circleBase * Config.POINTER_SCALE * 0.9; g.fillStyle='yellow'; g.beginPath(); g.ellipse(px,py,w/2,h/2,0,0,Math.PI*2); g.fill() } }
+}
+
+// ------------------ Bootstrapping ------------------
+(async ()=>{
+  const images = await preloadAll();
+  // images: { background, pointer, target, altTarget, bullet }
+  window.GAME = new Game(images);
+  // UI hooks
+  document.getElementById('btnReset').addEventListener('click', ()=>{ GAME.ResetToLevelSelect() });
+  document.getElementById('applySeed').addEventListener('click', ()=>{ let s = parseInt(document.getElementById('seed').value) || 12345; GAME.setSeed(s); });
+  const frSel = document.getElementById('fr'); frSel.addEventListener('change', ()=>{ let fr = parseInt(frSel.value); GAME.fixedDelta = 1/fr });
+  // apply initial FR & seed
+  GAME.setSeed(parseInt(document.getElementById('seed').value)||12345);
+  GAME.fixedDelta = 1 / parseInt(frSel.value || '30');
+})();
+
+</script>
+</body>
+</html>
