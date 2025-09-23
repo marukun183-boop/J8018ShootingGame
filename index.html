@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>ShootingGame — JS Canvas Port (改良版)</title>
+<title>ShootingGame — JS Canvas Port (60s / spawn scaled)</title>
 <style>
   html,body{height:100%;margin:0;background:#001;overflow:hidden}
   canvas{display:block}
@@ -37,6 +37,11 @@ const Config = {
   TARGET_IMAGE_DOWNSCALE: 10,
   BASE_BULLET_SIZE: 50 * 0.5 * 1.5 * 1.5 // 50 * GLOBAL_SCALE * SPRITE_SCALE * 1.5
 };
+
+// Original and new durations (used to scale spawn density)
+const ORIGINAL_GAME_DURATION = 45; // original design (seconds)
+const NEW_GAME_DURATION = 60;      // new requested duration (seconds)
+const spawnScale = ORIGINAL_GAME_DURATION / NEW_GAME_DURATION; // 45/60 = 0.75
 
 // ------------------ PRNG (simple LCG) ------------------
 class RNG { constructor(seed=12345){ this.seed = seed >>> 0 } next(){ this.seed = (1664525 * this.seed + 1013904223) >>> 0; return (this.seed & 0x7FFFFFFF) / 0x80000000 } nextInt(min,max){ return Math.floor(this.next() * (max - min + 1)) + min }}
@@ -125,7 +130,7 @@ class Game{
     this.popups = [];
     this.popupPool = [];
 
-    this.score = 0; this.level = 1; this.isLevelSelected = false; this.gameTime = 45; this.isGameOver=false;
+    this.score = 0; this.level = 1; this.isLevelSelected = false; this.gameTime = NEW_GAME_DURATION; this.isGameOver=false;
     this.lastShotTime = -9999; this.pointerPos = {x:canvas.width/DPR/2,y:canvas.height/DPR/2};
     this.BACKGROUND_DOWNSCALE = Config.IMAGE_DOWNSCALE;
     this.maxTargets = 20;
@@ -201,6 +206,9 @@ class Game{
     // baseProb is the original per-frame probability at 30FPS
     let baseProb = 0.006 + this.level * 0.003 + Math.min(0.02, this.score/8000);
     if (this.level == 11) baseProb *= 3.2;
+
+    // Apply global spawn scaling so 60s start -> equivalent of original 45s start
+    baseProb *= spawnScale;
 
     // Convert to probability for this update interval dt:
     // scaledProb = 1 - (1 - baseProb)^(30 * dt)
@@ -278,9 +286,9 @@ class Game{
     this.returnTarget = new ReturnTarget(cx, cy, Math.max(18, Math.round(160 * Config.GLOBAL_SCALE * Config.SPRITE_SCALE)));
   }
 
-  ResetToLevelSelect(){ this.isLevelSelected = false; this.isGameOver=false; this.gameTime = 45; for (let i=this.liveTargets.length-1;i>=0;i--) this.targetPool.ret(this.liveTargets[i]); this.liveTargets.length=0; for (let i=this.liveBullets.length-1;i>=0;i--) this.bulletPool.ret(this.liveBullets[i]); this.liveBullets.length=0; for (let i=this.popups.length-1;i>=0;i--){ this.popupPool.push(this.popups[i]) } this.popups.length=0; this.returnTarget=null; this.CreateLevelTargets() }
+  ResetToLevelSelect(){ this.isLevelSelected = false; this.isGameOver=false; this.gameTime = NEW_GAME_DURATION; for (let i=this.liveTargets.length-1;i>=0;i--) this.targetPool.ret(this.liveTargets[i]); this.liveTargets.length=0; for (let i=this.liveBullets.length-1;i>=0;i--) this.bulletPool.ret(this.liveBullets[i]); this.liveBullets.length=0; for (let i=this.popups.length-1;i>=0;i--){ this.popupPool.push(this.popups[i]) } this.popups.length=0; this.returnTarget=null; this.CreateLevelTargets() }
 
-  UpdateBulletsSelection(dt){ for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; b.update(dt); if (b.shouldCheckCollision()){ for (let j=this.levelTargets.length-1;j>=0;j--){ let lt=this.levelTargets[j]; if (!lt.isHit && this.CheckHitLevel(b, lt)){ lt.isHit=true; this.level = lt.levelNumber; this.isLevelSelected = true; this.liveTargets.length=0; this.score=0; this.lastShotTime = -9999; this.gameTime=45; this.isGameOver=false; for (let k=this.liveBullets.length-1;k>=0;k--) this.bulletPool.ret(this.liveBullets[k]); this.liveBullets.length=0; return } } } } for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; if (b.shouldBeRemoved()){ this.liveBullets.splice(i,1); this.bulletPool.ret(b) } } }
+  UpdateBulletsSelection(dt){ for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; b.update(dt); if (b.shouldCheckCollision()){ for (let j=this.levelTargets.length-1;j>=0;j--){ let lt=this.levelTargets[j]; if (!lt.isHit && this.CheckHitLevel(b, lt)){ lt.isHit=true; this.level = lt.levelNumber; this.isLevelSelected = true; this.liveTargets.length=0; this.score=0; this.lastShotTime = -9999; this.gameTime=NEW_GAME_DURATION; this.isGameOver=false; for (let k=this.liveBullets.length-1;k>=0;k--) this.bulletPool.ret(this.liveBullets[k]); this.liveBullets.length=0; return } } } } for (let i=this.liveBullets.length-1;i>=0;i--){ let b=this.liveBullets[i]; if (b.shouldBeRemoved()){ this.liveBullets.splice(i,1); this.bulletPool.ret(b) } } }
   CheckHitLevel(b,lt){ let dx = b.x - lt.x; let dy = b.y - lt.y; let r = (b.getSize()/2) + (lt.size/2); return (dx*dx + dy*dy) < (r*r*1.2) }
 
   // drawing
