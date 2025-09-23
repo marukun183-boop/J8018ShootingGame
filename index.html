@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>ShootingGame — JS Canvas Port (UI 下寄せ反映)</title>
+<title>ShootingGame — JS Canvas Port </title>
 <style>
   html,body{height:100%;margin:0;background:#001;overflow:hidden}
   canvas{display:block}
@@ -307,15 +307,18 @@ class Game{
     if (this.images.background){ ctx.drawImage(this.images.background, 0, 0, canvas.width/DPR, canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
     else { ctx.fillStyle = 'darkslateblue'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
 
-    // compute UI font size used for top texts (this will also be used to shift them down by 1 char)
+    // compute UI font size used for top texts (this will also be used to shift them down)
     const uiFontSize = 20 * Config.GLOBAL_SCALE * 2.5; // same as drawOtherUI uses
-    const uiShift = uiFontSize; // shift by one character height
+
+    // previous shift was 1.0 * uiFontSize; user asked to shift further by 70% of that -> total 1.7 * uiFontSize
+    const uiShiftMultiplier = 1.7;
+    const uiShift = uiFontSize * uiShiftMultiplier;
 
     if (!this.isLevelSelected){
       ctx.fillStyle='white';
       ctx.font = `bold ${28*Config.GLOBAL_SCALE}px Arial`;
       ctx.textAlign='center';
-      // move the hint down by one "character height"
+      // move the hint down by uiShift
       ctx.fillText('Shoot a level target to start (click to shoot)', canvas.width/DPR/2, 40 + uiShift);
       for (let i=0;i<this.levelTargets.length;i++) this.levelTargets[i].draw(ctx);
       for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
@@ -345,7 +348,7 @@ class Game{
   }
 
   drawOtherUI(g, shift = 0){
-    // move top UI texts down by 'shift' (px) which we set to one character height when calling
+    // move top UI texts down by 'shift' (px)
     const fontSize = 20 * Config.GLOBAL_SCALE * 2.5;
     g.fillStyle='white';
     g.font = `bold ${fontSize}px Arial`;
@@ -383,3 +386,4 @@ class Game{
 </script>
 </body>
 </html>
+
