@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>ShootingGame — JS Canvas Port (得点 +20%, 難易度維持)</title>
+<title>ShootingGame — JS Canvas Port (UI 下寄せ反映)</title>
 <style>
   html,body{height:100%;margin:0;background:#001;overflow:hidden}
   canvas{display:block}
@@ -307,13 +307,28 @@ class Game{
     if (this.images.background){ ctx.drawImage(this.images.background, 0, 0, canvas.width/DPR, canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
     else { ctx.fillStyle = 'darkslateblue'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
 
-    if (!this.isLevelSelected){ ctx.fillStyle='white'; ctx.font = `bold ${28*Config.GLOBAL_SCALE}px Arial`; ctx.textAlign='center'; ctx.fillText('Shoot a level target to start (click to shoot)', canvas.width/DPR/2, 40); for (let i=0;i<this.levelTargets.length;i++) this.levelTargets[i].draw(ctx); for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } this.drawPointer(ctx); return }
+    // compute UI font size used for top texts (this will also be used to shift them down by 1 char)
+    const uiFontSize = 20 * Config.GLOBAL_SCALE * 2.5; // same as drawOtherUI uses
+    const uiShift = uiFontSize; // shift by one character height
+
+    if (!this.isLevelSelected){
+      ctx.fillStyle='white';
+      ctx.font = `bold ${28*Config.GLOBAL_SCALE}px Arial`;
+      ctx.textAlign='center';
+      // move the hint down by one "character height"
+      ctx.fillText('Shoot a level target to start (click to shoot)', canvas.width/DPR/2, 40 + uiShift);
+      for (let i=0;i<this.levelTargets.length;i++) this.levelTargets[i].draw(ctx);
+      for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
+      for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
+      this.drawPointer(ctx);
+      return;
+    }
 
     for (let i=0;i<this.liveTargets.length;i++) this.liveTargets[i].draw(ctx, this.images.target, this.images.altTarget);
     for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
     for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
     for (let i=0;i<this.popups.length;i++) this.popups[i].draw(ctx);
-    this.drawOtherUI(ctx);
+    this.drawOtherUI(ctx, uiShift);
 
     if (this.isGameOver){ ctx.textAlign='center'; ctx.fillStyle='orange'; ctx.font = `bold ${48*Config.GLOBAL_SCALE*2.5}px Arial`; ctx.fillText(`Final Score: ${this.score}`, canvas.width/DPR/2, canvas.height/DPR*0.28); ctx.fillStyle='white'; ctx.font = `bold ${20*Config.GLOBAL_SCALE*2.5}px Arial`; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; ctx.fillText(levelText, canvas.width/DPR/2, canvas.height/DPR*0.28 + 80); ctx.fillText('次のコーナーに行ってらっしゃい！！', canvas.width/DPR/2, canvas.height/DPR*0.28 + 140);
       if (this.returnTarget){
@@ -329,7 +344,24 @@ class Game{
     this.drawPointer(ctx);
   }
 
-  drawOtherUI(g){ g.fillStyle='white'; g.font = `bold ${20*Config.GLOBAL_SCALE*2.5}px Arial`; g.textAlign='left'; g.fillText(`Score: ${this.score}`, 20, 36); g.textAlign='center'; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; g.fillText(levelText, canvas.width/DPR/2, 36); g.textAlign='right'; g.fillStyle='yellow'; g.fillText(`Time: ${this.gameTime.toFixed(1)}s`, canvas.width/DPR - 20, 36) }
+  drawOtherUI(g, shift = 0){
+    // move top UI texts down by 'shift' (px) which we set to one character height when calling
+    const fontSize = 20 * Config.GLOBAL_SCALE * 2.5;
+    g.fillStyle='white';
+    g.font = `bold ${fontSize}px Arial`;
+    g.textAlign='left';
+    // original Y was 36 -> shift down by `shift`
+    const y = 36 + (shift || 0);
+    g.fillText(`Score: ${this.score}`, 20, y);
+
+    g.textAlign='center';
+    let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`;
+    g.fillText(levelText, canvas.width/DPR/2, y);
+
+    g.textAlign='right';
+    g.fillStyle='yellow';
+    g.fillText(`Time: ${this.gameTime.toFixed(1)}s`, canvas.width/DPR - 20, y)
+  }
 
   drawPointer(g){ let px = this.pointerPos.x; let py = this.pointerPos.y; let imgBase = 80 * Config.GLOBAL_SCALE; let circleBase = 48 * Config.GLOBAL_SCALE; if (this.images.pointer){ let w = imgBase * Config.POINTER_SCALE * 1.6; let h = imgBase * Config.POINTER_SCALE * 0.95; g.drawImage(this.images.pointer, px - w/2, py - h/2, w, h); } else { let w = circleBase * Config.POINTER_SCALE * 1.8; let h = circleBase * Config.POINTER_SCALE * 0.9; g.fillStyle='yellow'; g.beginPath(); g.ellipse(px,py,w/2,h/2,0,0,Math.PI*2); g.fill() } }
 }
