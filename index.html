@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>ShootingGame — JS Canvas Port (移植版, 画像対応, 改良版)</title>
+<title>ShootingGame — JS Canvas Port (改良版)</title>
 <style>
   html,body{height:100%;margin:0;background:#001;overflow:hidden}
   canvas{display:block}
-  #ui{position:fixed;left:8px;top:8px;color:#fff;font-family:Arial,Helvetica,sans-serif;z-index:10}
+  #ui{position:fixed;left:8px;top:8px;color:#fff;font-family:Arial,Helvetica,sans-serif;z-index:10;font-weight:700}
   #controls{background:rgba(0,0,0,0.4);padding:8px;border-radius:6px}
   button,input{margin:4px}
 </style>
@@ -98,10 +98,10 @@ class LevelTarget{ constructor(levelNumber,x,y,size){ this.levelNumber=levelNumb
     // draw circle
     g.beginPath(); g.fillStyle='rgba(135,206,235,0.78)'; g.ellipse(this.x,this.y,this.size/2,this.size/2,0,0,Math.PI*2); g.fill();
     g.lineWidth = Math.max(1,3*Config.GLOBAL_SCALE); g.strokeStyle='blue'; g.stroke();
-    // draw text centered both horizontally and vertically
+    // draw text centered both horizontally and vertically (bold)
     g.fillStyle = 'black';
     const fontSize = 28 * Config.GLOBAL_SCALE;
-    g.font = `${fontSize}px Arial`;
+    g.font = `bold ${fontSize}px Arial`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
     const txt = (this.levelNumber==11) ? 'EX' : String(this.levelNumber);
@@ -109,7 +109,7 @@ class LevelTarget{ constructor(levelNumber,x,y,size){ this.levelNumber=levelNumb
   }
 }
 
-class ScorePopup{ constructor(x,y,text,color,duration,fontSize){ this.reset(x,y,text,color,duration); this.fontSize = fontSize||18*Config.GLOBAL_SCALE*2.5 } reset(x,y,text,color,duration){ this.x=x; this.y=y; this.text=text; this.color=color; this.duration=duration; this.elapsed=0 } update(dt){ this.elapsed += dt; this.y -= dt * 20 } getExpired(){ return this.elapsed >= this.duration } draw(g){ let a = 1 - Math.min(1, this.elapsed/this.duration); let c = this.color; g.fillStyle = `rgba(${c.r},${c.g},${c.b},${(c.a/255)*a})`; g.font = `${this.fontSize}px Arial`; let metrics = g.measureText(this.text); g.fillText(this.text, this.x - metrics.width/2, this.y + this.fontSize/2 - 6) }
+class ScorePopup{ constructor(x,y,text,color,duration,fontSize){ this.reset(x,y,text,color,duration); this.fontSize = fontSize||18*Config.GLOBAL_SCALE*2.5 } reset(x,y,text,color,duration){ this.x=x; this.y=y; this.text=text; this.color=color; this.duration=duration; this.elapsed=0 } update(dt){ this.elapsed += dt; this.y -= dt * 20 } getExpired(){ return this.elapsed >= this.duration } draw(g){ let a = 1 - Math.min(1, this.elapsed/this.duration); let c = this.color; g.fillStyle = `rgba(${c.r},${c.g},${c.b},${(c.a/255)*a})`; g.font = `bold ${this.fontSize}px Arial`; let metrics = g.measureText(this.text); g.fillText(this.text, this.x - metrics.width/2, this.y + this.fontSize/2 - 6) }
 }
 
 // ------------------ Game ------------------
@@ -149,7 +149,7 @@ class Game{
     canvas.addEventListener('pointercancel', (e) => { e.preventDefault && e.preventDefault(); }, { passive: false });
 
     // timing
-    this.fixedDelta = 1/30; // default fixed-step
+    this.fixedDelta = 1/30; // default fixed-step (seconds)
     this.accumulator = 0; this.lastTime = performance.now()/1000;
     requestAnimationFrame(()=>this.loop());
   }
@@ -196,7 +196,31 @@ class Game{
 
   } catch(err){ console.error('update error', err) } }
 
-  UpdateTargets(dt){ let spawnProbPerTick = 0.006 + this.level * 0.003 + Math.min(0.02, this.score/8000); if (this.level==11) spawnProbPerTick *= 3.2; if (this.liveTargets.length < this.maxTargets && this.rng.next() < spawnProbPerTick){ let t = this.targetPool.rent(); this.InitializeTarget(t); this.liveTargets.push(t) } for (let i=this.liveTargets.length-1;i>=0;i--){ let t=this.liveTargets[i]; t.x += t.speed * dt; if (t.isOutOfBounds(canvas.width/DPR, canvas.height/DPR)){ this.liveTargets.splice(i,1); this.targetPool.ret(t) } } }
+  // UpdateTargets: spawn probability corrected to be time-consistent (30FPS base)
+  UpdateTargets(dt){
+    // baseProb is the original per-frame probability at 30FPS
+    let baseProb = 0.006 + this.level * 0.003 + Math.min(0.02, this.score/8000);
+    if (this.level == 11) baseProb *= 3.2;
+
+    // Convert to probability for this update interval dt:
+    // scaledProb = 1 - (1 - baseProb)^(30 * dt)
+    const scaledProb = 1 - Math.pow(1 - baseProb, 30 * dt);
+
+    if (this.liveTargets.length < this.maxTargets && this.rng.next() < scaledProb){
+      let t = this.targetPool.rent();
+      this.InitializeTarget(t);
+      this.liveTargets.push(t);
+    }
+
+    for (let i=this.liveTargets.length-1;i>=0;i--){
+      let t=this.liveTargets[i];
+      t.x += t.speed * dt;
+      if (t.isOutOfBounds(canvas.width/DPR, canvas.height/DPR)){
+        this.liveTargets.splice(i,1);
+        this.targetPool.ret(t);
+      }
+    }
+  }
 
   InitializeTarget(t){
     let fromLeft = (this.rng.nextInt(0,1)===0);
@@ -265,7 +289,7 @@ class Game{
     if (this.images.background){ ctx.drawImage(this.images.background, 0, 0, canvas.width/DPR, canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
     else { ctx.fillStyle = 'darkslateblue'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); ctx.fillStyle = 'rgba(0,0,0,0.235)'; ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR); }
 
-    if (!this.isLevelSelected){ ctx.fillStyle='white'; ctx.font = `${28*Config.GLOBAL_SCALE}px Arial`; ctx.textAlign='center'; ctx.fillText('Shoot a level target to start (click to shoot)', canvas.width/DPR/2, 40); for (let i=0;i<this.levelTargets.length;i++) this.levelTargets[i].draw(ctx); for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } this.drawPointer(ctx); return }
+    if (!this.isLevelSelected){ ctx.fillStyle='white'; ctx.font = `bold ${28*Config.GLOBAL_SCALE}px Arial`; ctx.textAlign='center'; ctx.fillText('Shoot a level target to start (click to shoot)', canvas.width/DPR/2, 40); for (let i=0;i<this.levelTargets.length;i++) this.levelTargets[i].draw(ctx); for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (!b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) } this.drawPointer(ctx); return }
 
     for (let i=0;i<this.liveTargets.length;i++) this.liveTargets[i].draw(ctx, this.images.target, this.images.altTarget);
     for (let i=0;i<this.liveBullets.length;i++){ let b=this.liveBullets[i]; if (b.hasCheckedCollision) b.draw(ctx, this.images.bullet) }
@@ -273,13 +297,13 @@ class Game{
     for (let i=0;i<this.popups.length;i++) this.popups[i].draw(ctx);
     this.drawOtherUI(ctx);
 
-    if (this.isGameOver){ ctx.textAlign='center'; ctx.fillStyle='orange'; ctx.font = `${48*Config.GLOBAL_SCALE*2.5}px Arial`; ctx.fillText(`Final Score: ${this.score}`, canvas.width/DPR/2, canvas.height/DPR*0.28); ctx.fillStyle='white'; ctx.font = `${20*Config.GLOBAL_SCALE*2.5}px Arial`; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; ctx.fillText(levelText, canvas.width/DPR/2, canvas.height/DPR*0.28 + 80); ctx.fillText('次のコーナーに行ってらっしゃい！！', canvas.width/DPR/2, canvas.height/DPR*0.28 + 140);
+    if (this.isGameOver){ ctx.textAlign='center'; ctx.fillStyle='orange'; ctx.font = `bold ${48*Config.GLOBAL_SCALE*2.5}px Arial`; ctx.fillText(`Final Score: ${this.score}`, canvas.width/DPR/2, canvas.height/DPR*0.28); ctx.fillStyle='white'; ctx.font = `bold ${20*Config.GLOBAL_SCALE*2.5}px Arial`; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; ctx.fillText(levelText, canvas.width/DPR/2, canvas.height/DPR*0.28 + 80); ctx.fillText('次のコーナーに行ってらっしゃい！！', canvas.width/DPR/2, canvas.height/DPR*0.28 + 140);
       if (this.returnTarget){
         // draw using same coords used for collision (we set them in EnterGameOverState)
         ctx.fillStyle='rgba(40,200,40,0.86)';
         ctx.beginPath(); ctx.ellipse(this.returnTarget.x, this.returnTarget.y, this.returnTarget.size/2, this.returnTarget.size/2,0,0,Math.PI*2); ctx.fill();
         ctx.lineWidth = Math.max(1,4*Config.GLOBAL_SCALE); ctx.strokeStyle='black'; ctx.stroke();
-        ctx.fillStyle='white'; ctx.font = `${22*Config.GLOBAL_SCALE}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillStyle='white'; ctx.font = `bold ${22*Config.GLOBAL_SCALE}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
         ctx.fillText('START', this.returnTarget.x, this.returnTarget.y);
       }
     }
@@ -287,7 +311,7 @@ class Game{
     this.drawPointer(ctx);
   }
 
-  drawOtherUI(g){ g.fillStyle='white'; g.font = `${20*Config.GLOBAL_SCALE*2.5}px Arial`; g.textAlign='left'; g.fillText(`Score: ${this.score}`, 20, 36); g.textAlign='center'; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; g.fillText(levelText, canvas.width/DPR/2, 36); g.textAlign='right'; g.fillStyle='yellow'; g.fillText(`Time: ${this.gameTime.toFixed(1)}s`, canvas.width/DPR - 20, 36) }
+  drawOtherUI(g){ g.fillStyle='white'; g.font = `bold ${20*Config.GLOBAL_SCALE*2.5}px Arial`; g.textAlign='left'; g.fillText(`Score: ${this.score}`, 20, 36); g.textAlign='center'; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; g.fillText(levelText, canvas.width/DPR/2, 36); g.textAlign='right'; g.fillStyle='yellow'; g.fillText(`Time: ${this.gameTime.toFixed(1)}s`, canvas.width/DPR - 20, 36) }
 
   drawPointer(g){ let px = this.pointerPos.x; let py = this.pointerPos.y; let imgBase = 80 * Config.GLOBAL_SCALE; let circleBase = 48 * Config.GLOBAL_SCALE; if (this.images.pointer){ let w = imgBase * Config.POINTER_SCALE * 1.6; let h = imgBase * Config.POINTER_SCALE * 0.95; g.drawImage(this.images.pointer, px - w/2, py - h/2, w, h); } else { let w = circleBase * Config.POINTER_SCALE * 1.8; let h = circleBase * Config.POINTER_SCALE * 0.9; g.fillStyle='yellow'; g.beginPath(); g.ellipse(px,py,w/2,h/2,0,0,Math.PI*2); g.fill() } }
 }
