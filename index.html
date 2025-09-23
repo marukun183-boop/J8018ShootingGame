@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>ShootingGame — JS Canvas Port (移植版, 画像対応)</title>
+<title>ShootingGame — JS Canvas Port (移植版, 画像対応, 改良版)</title>
 <style>
   html,body{height:100%;margin:0;background:#001;overflow:hidden}
   canvas{display:block}
@@ -93,7 +93,20 @@ class Target{ constructor(){ this.reset() } reset(){ this.x=0; this.y=0; this.si
 }
 
 class ReturnTarget{ constructor(x,y,size){ this.x=x; this.y=y; this.size=size; this.isHit=false } }
-class LevelTarget{ constructor(levelNumber,x,y,size){ this.levelNumber=levelNumber; this.x=x; this.y=y; this.size=size; this.isHit=false } draw(g){ g.beginPath(); g.fillStyle='rgba(135,206,235,0.78)'; g.ellipse(this.x,this.y,this.size/2,this.size/2,0,0,Math.PI*2); g.fill(); g.lineWidth = Math.max(1,3*Config.GLOBAL_SCALE); g.strokeStyle='blue'; g.stroke(); g.fillStyle='black'; g.font = `${28*Config.GLOBAL_SCALE}px Arial`; let txt = (this.levelNumber==11)?'EX':String(this.levelNumber); let metrics = g.measureText(txt); let h = 28*Config.GLOBAL_SCALE; g.fillText(txt, this.x - metrics.width/2, this.y + h/2 - 6); }
+class LevelTarget{ constructor(levelNumber,x,y,size){ this.levelNumber=levelNumber; this.x=x; this.y=y; this.size=size; this.isHit=false } 
+  draw(g){
+    // draw circle
+    g.beginPath(); g.fillStyle='rgba(135,206,235,0.78)'; g.ellipse(this.x,this.y,this.size/2,this.size/2,0,0,Math.PI*2); g.fill();
+    g.lineWidth = Math.max(1,3*Config.GLOBAL_SCALE); g.strokeStyle='blue'; g.stroke();
+    // draw text centered both horizontally and vertically
+    g.fillStyle = 'black';
+    const fontSize = 28 * Config.GLOBAL_SCALE;
+    g.font = `${fontSize}px Arial`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const txt = (this.levelNumber==11) ? 'EX' : String(this.levelNumber);
+    g.fillText(txt, this.x, this.y);
+  }
 }
 
 class ScorePopup{ constructor(x,y,text,color,duration,fontSize){ this.reset(x,y,text,color,duration); this.fontSize = fontSize||18*Config.GLOBAL_SCALE*2.5 } reset(x,y,text,color,duration){ this.x=x; this.y=y; this.text=text; this.color=color; this.duration=duration; this.elapsed=0 } update(dt){ this.elapsed += dt; this.y -= dt * 20 } getExpired(){ return this.elapsed >= this.duration } draw(g){ let a = 1 - Math.min(1, this.elapsed/this.duration); let c = this.color; g.fillStyle = `rgba(${c.r},${c.g},${c.b},${(c.a/255)*a})`; g.font = `${this.fontSize}px Arial`; let metrics = g.measureText(this.text); g.fillText(this.text, this.x - metrics.width/2, this.y + this.fontSize/2 - 6) }
@@ -122,9 +135,18 @@ class Game{
 
     this.CreateLevelTargets();
 
-    // input
-    canvas.addEventListener('mousemove', (e)=>{ let r=canvas.getBoundingClientRect(); this.pointerPos.x = clamp((e.clientX - r.left),0, r.width); this.pointerPos.y = clamp((e.clientY - r.top), 0, r.height) });
-    canvas.addEventListener('mousedown', (e)=>{ this.onMouseDown(e) });
+    // input — unified pointer events for mouse/touch/stylus
+    canvas.style.touchAction = 'none';
+    const pointerHandler = (e) => {
+      e.preventDefault && e.preventDefault();
+      let r = canvas.getBoundingClientRect();
+      this.pointerPos.x = clamp((e.clientX - r.left), 0, r.width);
+      this.pointerPos.y = clamp((e.clientY - r.top), 0, r.height);
+    };
+    canvas.addEventListener('pointermove', pointerHandler, { passive: false });
+    canvas.addEventListener('pointerdown', (e) => { pointerHandler(e); this.onMouseDown(e); }, { passive: false });
+    canvas.addEventListener('pointerup', (e) => { e.preventDefault && e.preventDefault(); }, { passive: false });
+    canvas.addEventListener('pointercancel', (e) => { e.preventDefault && e.preventDefault(); }, { passive: false });
 
     // timing
     this.fixedDelta = 1/30; // default fixed-step
@@ -136,18 +158,35 @@ class Game{
 
   CreateLevelTargets(){ this.levelTargets.length=0; let total = 11; let margin = Math.max(1, Math.round(120 * Config.GLOBAL_SCALE)); let usableWidth = canvas.width/DPR - margin*2; let spacing = usableWidth/total; let centerY = canvas.height/DPR/2; for (let i=1;i<=total;i++){ let rawSize = (i<=10) ? Math.max(40,160 - (i-1)*12) : 100; let size = Math.max(12, Math.round(rawSize * Config.GLOBAL_SCALE * Config.SPRITE_SCALE * 1.5)); let x = margin + spacing*(i-1) + spacing/2; let y = centerY; this.levelTargets.push(new LevelTarget(i,x,y,size)) } }
 
-  onMouseDown(e){ let now = performance.now(); if ((now - this.lastShotTime) < 300) return; this.lastShotTime = now; let rect = canvas.getBoundingClientRect(); let tx = clamp(e.clientX - rect.left, 0, rect.width); let ty = clamp(e.clientY - rect.top, 0, rect.height); let startX = rect.width/2; let startY = rect.height - 30; let b = this.bulletPool.rent(); b.init(startX, startY, tx, ty); this.liveBullets.push(b); this.pointerPos.x = tx; this.pointerPos.y = ty }
+  onMouseDown(e){
+    // allow shooting once per physics frame (1 frame cooldown)
+    const now = performance.now();
+    const frameMs = this.fixedDelta * 1000;
+    if ((now - this.lastShotTime) < frameMs) return;
+    this.lastShotTime = now;
+
+    let rect = canvas.getBoundingClientRect();
+    let tx = clamp(e.clientX - rect.left, 0, rect.width);
+    let ty = clamp(e.clientY - rect.top, 0, rect.height);
+    let startX = rect.width/2;
+    let startY = rect.height - 30;
+    let b = this.bulletPool.rent();
+    b.init(startX, startY, tx, ty);
+    this.liveBullets.push(b);
+    this.pointerPos.x = tx;
+    this.pointerPos.y = ty;
+  }
 
   loop(){ let now = performance.now()/1000; let frameTime = now - this.lastTime; this.lastTime = now; if (frameTime > 0.25) frameTime = 0.25; this.accumulator += frameTime; while (this.accumulator >= this.fixedDelta){ this.update(this.fixedDelta); this.accumulator -= this.fixedDelta } this.draw(); requestAnimationFrame(()=>this.loop()) }
 
   update(dt){ try{
     if (!this.isLevelSelected){ this.UpdateBulletsSelection(dt); return }
 
-    if (!this.isGameOver){ this.gameTime -= dt; if (this.gameTime <= 0){ this.gameTime = 0; this.EnterGameOverState() } }
+    if (!this.isGameOver){ this.gameTime -= dt * 1.2; if (this.gameTime <= 0){ this.gameTime = 0; this.EnterGameOverState() } }
 
     if (!this.isGameOver) this.UpdateTargets(dt);
 
-    for (let i=this.liveBullets.length-1;i>=0;i--) this.liveBullets[i].update(dt);
+    for (let i=0;i<this.liveBullets.length;i++) this.liveBullets[i].update(dt);
 
     for (let i=this.popups.length-1;i>=0;i--){ let p=this.popups[i]; p.update(dt); if (p.getExpired()){ this.popups.splice(i,1); this.popupPool.push(p) } }
 
@@ -159,7 +198,44 @@ class Game{
 
   UpdateTargets(dt){ let spawnProbPerTick = 0.006 + this.level * 0.003 + Math.min(0.02, this.score/8000); if (this.level==11) spawnProbPerTick *= 3.2; if (this.liveTargets.length < this.maxTargets && this.rng.next() < spawnProbPerTick){ let t = this.targetPool.rent(); this.InitializeTarget(t); this.liveTargets.push(t) } for (let i=this.liveTargets.length-1;i>=0;i--){ let t=this.liveTargets[i]; t.x += t.speed * dt; if (t.isOutOfBounds(canvas.width/DPR, canvas.height/DPR)){ this.liveTargets.splice(i,1); this.targetPool.ret(t) } } }
 
-  InitializeTarget(t){ let fromLeft = (this.rng.nextInt(0,1)===0); let rawBaseSize = Math.max(12, 120 - (this.level - 1) * 9); let sizeVar = this.rng.nextInt(-6,7); let rawSizeVal = Math.max(8, rawBaseSize + sizeVar); t.size = Math.max(8, Math.round(rawSizeVal * Config.GLOBAL_SCALE * Config.SPRITE_SCALE * 1.5)); t.y = this.rng.nextInt(20, Math.max(40, Math.floor(canvas.height/DPR * 3 / 4))); t.x = fromLeft ? -t.size : canvas.width/DPR + t.size; let slowMin, slowMax, fastMin, fastMax; if (this.level == 11){ slowMin = 800; slowMax = 1200; fastMin = 1300; fastMax = 2200; } else { slowMin = 60 + (this.level - 1) * 8; slowMax = 120 + (this.level - 1) * 12; fastMin = 220 + (this.level - 1) * 25; fastMax = 420 + (this.level - 1) * 40 } let pick = this.rng.next(); let speedMag; if (pick < 0.55) speedMag = slowMin + this.rng.next() * (slowMax - slowMin); else if (pick < 0.9) speedMag = fastMin + this.rng.next() * (fastMax - fastMin); else speedMag = fastMax + this.rng.next() * Math.max(1, fastMax - fastMin); t.speed = fromLeft ? speedMag : -speedMag; let baseScore = (this.level == 11) ? 200 : Math.max(6, this.level * 12); let sizeFactor = Math.max(0.35, 1.0 - (t.size - 10) / 120.0); let speedNorm = (speedMag - slowMin) / Math.max(1, fastMax - slowMin); let speedFactor = 1.0 + Math.min(3.5, speedNorm * 3.0); t.scoreValue = Math.max(1, Math.round(baseScore * speedFactor * sizeFactor)); this.AddRecentScore(this.level, t.scoreValue); let cutoff = this.GetPercentileCutoff(this.level, 0.86); if (cutoff <= 0) t.useAltImage = (t.scoreValue >= baseScore * 1.6); else t.useAltImage = (t.scoreValue >= cutoff); if (!t.useAltImage && this.rng.next() < 0.02) t.useAltImage = true; t.isHit = false }
+  InitializeTarget(t){
+    let fromLeft = (this.rng.nextInt(0,1)===0);
+    let rawBaseSize = Math.max(12, 120 - (this.level - 1) * 9);
+    let sizeVar = this.rng.nextInt(-6,7);
+    let rawSizeVal = Math.max(8, rawBaseSize + sizeVar);
+    t.size = Math.max(8, Math.round(rawSizeVal * Config.GLOBAL_SCALE * Config.SPRITE_SCALE * 1.5));
+
+    // move top spawn down: avoid top 1/6 of screen
+    const minY = Math.floor(canvas.height/DPR / 6);
+    const maxY = Math.floor(canvas.height/DPR * 3 / 4);
+    t.y = this.rng.nextInt(Math.max(20, minY), Math.max(Math.max(40, minY), maxY));
+
+    t.x = fromLeft ? -t.size : canvas.width/DPR + t.size;
+
+    let slowMin, slowMax, fastMin, fastMax;
+    if (this.level == 11){ slowMin = 800; slowMax = 1200; fastMin = 1300; fastMax = 2200; }
+    else { slowMin = 60 + (this.level - 1) * 8; slowMax = 120 + (this.level - 1) * 12; fastMin = 220 + (this.level - 1) * 25; fastMax = 420 + (this.level - 1) * 40 }
+
+    let pick = this.rng.next(); let speedMag;
+    if (pick < 0.55) speedMag = slowMin + this.rng.next() * (slowMax - slowMin);
+    else if (pick < 0.9) speedMag = fastMin + this.rng.next() * (fastMax - fastMin);
+    else speedMag = fastMax + this.rng.next() * Math.max(1, fastMax - fastMin);
+
+    t.speed = fromLeft ? speedMag : -speedMag;
+
+    let baseScore = (this.level == 11) ? 200 : Math.max(6, this.level * 12);
+    let sizeFactor = Math.max(0.35, 1.0 - (t.size - 10) / 120.0);
+    let speedNorm = (speedMag - slowMin) / Math.max(1, fastMax - slowMin);
+    let speedFactor = 1.0 + Math.min(3.5, speedNorm * 3.0);
+    t.scoreValue = Math.max(1, Math.round(baseScore * speedFactor * sizeFactor));
+
+    this.AddRecentScore(this.level, t.scoreValue);
+    let cutoff = this.GetPercentileCutoff(this.level, 0.86);
+    if (cutoff <= 0) t.useAltImage = (t.scoreValue >= baseScore * 1.6);
+    else t.useAltImage = (t.scoreValue >= cutoff);
+    if (!t.useAltImage && this.rng.next() < 0.02) t.useAltImage = true;
+    t.isHit = false
+  }
 
   AddRecentScore(lvl,s){ if (lvl<1||lvl>11) return; let list = this.recentScoresPerLevel[lvl]; list.push(s); if (list.length > 300) list.splice(0, list.length - 300) }
   GetPercentileCutoff(lvl, percentile){ if (lvl<1||lvl>11) return 0; let list = this.recentScoresPerLevel[lvl]; if (list.length < 12) return 0; let sorted = Array.from(list).sort((a,b)=>a-b); let idx = Math.ceil(percentile * sorted.length) - 1; idx = Math.max(0, Math.min(sorted.length-1, idx)); return sorted[idx] }
@@ -169,7 +245,14 @@ class Game{
   CheckHit(b,t){ let dx = b.x - t.x; let dy = b.y - t.y; let r = (b.getSize()/2) + (t.size/2); return (dx*dx + dy*dy) < (r*r*1.2) }
   CheckHitReturn(b,rt){ let dx = b.x - rt.x; let dy = b.y - rt.y; let r = (b.getSize()/2) + (rt.size/2); return (dx*dx + dy*dy) < (r*r*1.2) }
 
-  EnterGameOverState(){ if (this.isGameOver) return; this.isGameOver = true; for (let i=this.liveTargets.length-1;i>=0;i--) this.targetPool.ret(this.liveTargets[i]); this.liveTargets.length=0; let cx = canvas.width/DPR/2; let cy = canvas.height/DPR/2 + 140 * Config.GLOBAL_SCALE + 120 * Config.GLOBAL_SCALE; this.returnTarget = new ReturnTarget(cx, cy, Math.max(18, Math.round(160 * Config.GLOBAL_SCALE * Config.SPRITE_SCALE))) }
+  EnterGameOverState(){ if (this.isGameOver) return; this.isGameOver = true; for (let i=this.liveTargets.length-1;i>=0;i--) this.targetPool.ret(this.liveTargets[i]); this.liveTargets.length=0;
+    // place the return target at same coordinates as drawn (normalize)
+    const cx = canvas.width/DPR/2;
+    const cy_base = canvas.height/DPR/2 + 140 * Config.GLOBAL_SCALE + 120 * Config.GLOBAL_SCALE;
+    const extraDown = 160 * Config.GLOBAL_SCALE;
+    const cy = cy_base + extraDown; // put y where we will draw it
+    this.returnTarget = new ReturnTarget(cx, cy, Math.max(18, Math.round(160 * Config.GLOBAL_SCALE * Config.SPRITE_SCALE)));
+  }
 
   ResetToLevelSelect(){ this.isLevelSelected = false; this.isGameOver=false; this.gameTime = 45; for (let i=this.liveTargets.length-1;i>=0;i--) this.targetPool.ret(this.liveTargets[i]); this.liveTargets.length=0; for (let i=this.liveBullets.length-1;i>=0;i--) this.bulletPool.ret(this.liveBullets[i]); this.liveBullets.length=0; for (let i=this.popups.length-1;i>=0;i--){ this.popupPool.push(this.popups[i]) } this.popups.length=0; this.returnTarget=null; this.CreateLevelTargets() }
 
@@ -190,7 +273,16 @@ class Game{
     for (let i=0;i<this.popups.length;i++) this.popups[i].draw(ctx);
     this.drawOtherUI(ctx);
 
-    if (this.isGameOver){ ctx.textAlign='center'; ctx.fillStyle='orange'; ctx.font = `${48*Config.GLOBAL_SCALE*2.5}px Arial`; ctx.fillText(`Final Score: ${this.score}`, canvas.width/DPR/2, canvas.height/DPR*0.28); ctx.fillStyle='white'; ctx.font = `${20*Config.GLOBAL_SCALE*2.5}px Arial`; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; ctx.fillText(levelText, canvas.width/DPR/2, canvas.height/DPR*0.28 + 80); ctx.fillText('次のコーナーに行ってらっしゃい！！', canvas.width/DPR/2, canvas.height/DPR*0.28 + 140); if (this.returnTarget){ let extraDown = 160 * Config.GLOBAL_SCALE; ctx.fillStyle='rgba(40,200,40,0.86)'; ctx.beginPath(); ctx.ellipse(this.returnTarget.x, this.returnTarget.y + extraDown, this.returnTarget.size/2, this.returnTarget.size/2,0,0,Math.PI*2); ctx.fill(); ctx.lineWidth = Math.max(1,4*Config.GLOBAL_SCALE); ctx.strokeStyle='black'; ctx.stroke(); ctx.fillStyle='white'; ctx.font = `${22*Config.GLOBAL_SCALE}px Arial`; ctx.fillText('START', this.returnTarget.x, this.returnTarget.y + extraDown + (this.returnTarget.size/4)); } }
+    if (this.isGameOver){ ctx.textAlign='center'; ctx.fillStyle='orange'; ctx.font = `${48*Config.GLOBAL_SCALE*2.5}px Arial`; ctx.fillText(`Final Score: ${this.score}`, canvas.width/DPR/2, canvas.height/DPR*0.28); ctx.fillStyle='white'; ctx.font = `${20*Config.GLOBAL_SCALE*2.5}px Arial`; let levelText = (this.level==11)?'Level: EX':`Level: ${this.level}`; ctx.fillText(levelText, canvas.width/DPR/2, canvas.height/DPR*0.28 + 80); ctx.fillText('次のコーナーに行ってらっしゃい！！', canvas.width/DPR/2, canvas.height/DPR*0.28 + 140);
+      if (this.returnTarget){
+        // draw using same coords used for collision (we set them in EnterGameOverState)
+        ctx.fillStyle='rgba(40,200,40,0.86)';
+        ctx.beginPath(); ctx.ellipse(this.returnTarget.x, this.returnTarget.y, this.returnTarget.size/2, this.returnTarget.size/2,0,0,Math.PI*2); ctx.fill();
+        ctx.lineWidth = Math.max(1,4*Config.GLOBAL_SCALE); ctx.strokeStyle='black'; ctx.stroke();
+        ctx.fillStyle='white'; ctx.font = `${22*Config.GLOBAL_SCALE}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText('START', this.returnTarget.x, this.returnTarget.y);
+      }
+    }
 
     this.drawPointer(ctx);
   }
