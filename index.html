@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>ShootingGame — JS Canvas Port (60s / spawn scaled)</title>
+<title>ShootingGame — JS Canvas Port (得点 +20%, 難易度維持)</title>
 <style>
   html,body{height:100%;margin:0;background:#001;overflow:hidden}
   canvas{display:block}
@@ -259,14 +259,24 @@ class Game{
     let sizeFactor = Math.max(0.35, 1.0 - (t.size - 10) / 120.0);
     let speedNorm = (speedMag - slowMin) / Math.max(1, fastMax - slowMin);
     let speedFactor = 1.0 + Math.min(3.5, speedNorm * 3.0);
-    t.scoreValue = Math.max(1, Math.round(baseScore * speedFactor * sizeFactor));
 
-    this.AddRecentScore(this.level, t.scoreValue);
+    // --- preserve difficulty: compute rawScore used for difficulty/alt-image selection and history ---
+    const rawScore = Math.max(1, Math.round(baseScore * speedFactor * sizeFactor));
+
+    // store rawScore into recent scores (difficulty tracking uses rawScore)
+    this.AddRecentScore(this.level, rawScore);
+
+    // compute cutoff using recent raw scores
     let cutoff = this.GetPercentileCutoff(this.level, 0.86);
-    if (cutoff <= 0) t.useAltImage = (t.scoreValue >= baseScore * 1.6);
-    else t.useAltImage = (t.scoreValue >= cutoff);
+
+    if (cutoff <= 0) t.useAltImage = (rawScore >= baseScore * 1.6);
+    else t.useAltImage = (rawScore >= cutoff);
     if (!t.useAltImage && this.rng.next() < 0.02) t.useAltImage = true;
-    t.isHit = false
+
+    // --- award value to player: 20% increased from rawScore (rounded) ---
+    t.scoreValue = Math.max(1, Math.round(rawScore * 1.2));
+
+    t.isHit = false;
   }
 
   AddRecentScore(lvl,s){ if (lvl<1||lvl>11) return; let list = this.recentScoresPerLevel[lvl]; list.push(s); if (list.length > 300) list.splice(0, list.length - 300) }
